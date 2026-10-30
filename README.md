@@ -23,7 +23,7 @@ After the one-time Vercel import and webhook setup, each push to the production 
 
 ## Local development
 
-`npm start` runs the existing local polling server at `http://localhost:3000`. The webhook deployment uses Redis and Vercel Functions instead of local disk storage.
+`npm start` runs the local polling server (`scripts/local-server.js`; kept out of the project root so Vercel does not detect it as the app entrypoint) at `http://localhost:3000`. The webhook deployment uses Redis and Vercel Functions instead of local disk storage.
 
 ## Telegram behavior
 

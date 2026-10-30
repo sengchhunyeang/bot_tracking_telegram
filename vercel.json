@@ -5,7 +5,7 @@
   ],
   "functions": {
     "api/[...path].js": {
-      "includeFiles": "public/index.html",
+      "includeFiles": "views/index.html",
       "maxDuration": 30
     }
   }

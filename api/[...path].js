@@ -3,7 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { Redis } = require('@upstash/redis');
 
-const html = fs.readFileSync(path.join(process.cwd(), 'public', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(process.cwd(), 'views', 'index.html'), 'utf8');
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
@@ -183,7 +183,7 @@ module.exports = async function handler(req, res) {
         redis.llen(MESSAGE_KEY), redis.get('telegram-dashboard:last-update'), telegram('getChat', { chat_id: CHAT_ID }),
         telegram('getChatMember', { chat_id: CHAT_ID, user_id: bot.id }), telegram('getWebhookInfo'),
       ]);
-      sendJson(res, 200, { configured: Boolean(TOKEN && CHAT_ID && SECRET && PASSWORD), connected: true, bot,
+      sendJson(res, 200, { mode: 'webhook', configured: Boolean(TOKEN && CHAT_ID && SECRET && PASSWORD), connected: true, bot,
         groupHealth: { accessible: true, title: chat.title || 'Telegram group', memberStatus: member.status,
           isAdmin: ['administrator', 'creator'].includes(member.status), webhookActive: Boolean(webhook.url) },
         count: Number(count) || 0, lastUpdate }); return;

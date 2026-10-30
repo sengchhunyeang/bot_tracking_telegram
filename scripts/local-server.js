@@ -4,7 +4,7 @@ const path = require('node:path');
 
 function loadEnv() {
   try {
-    for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)) {
+    for (const line of fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8').split(/\r?\n/)) {
       const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
       if (match && process.env[match[1]] === undefined) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
     }
@@ -15,7 +15,7 @@ loadEnv();
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const port = Number(process.env.PORT || 3000);
 const targetChatId = process.env.TELEGRAM_CHAT_ID || '';
-const dataDir = path.join(__dirname, 'data');
+const dataDir = path.join(__dirname, '..', 'data');
 const messagesPath = path.join(dataDir, 'messages.json');
 const maxDownloadBytes = 20 * 1024 * 1024;
 const mimeByExtension = {
@@ -140,7 +140,7 @@ async function diagnoseGroup() {
   }
 }
 
-const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
+const html = fs.readFileSync(path.join(__dirname, '..', 'views', 'index.html'));
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('X-Content-Type-Options', 'nosniff');

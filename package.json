@@ -4,7 +4,7 @@
   "private": true,
   "description": "A serverless Telegram group dashboard for Vercel",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/local-server.js",
     "webhook:set": "node --env-file=.env scripts/set-webhook.js"
   },
   "engines": { "node": ">=20" },
