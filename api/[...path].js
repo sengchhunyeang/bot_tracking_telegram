@@ -118,7 +118,8 @@ module.exports = async function handler(req, res) {
   res.setHeader('referrer-policy', 'same-origin');
 
   try {
-    if (endpoint === 'dashboard') {
+    // The / rewrite keeps the original URL, so an empty route is the dashboard too.
+    if (endpoint === 'dashboard' || endpoint === '') {
       if (req.method !== 'GET') { res.writeHead(405); res.end('Method not allowed'); return; }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(html); return;
     }
