@@ -1,0 +1,12 @@
+{
+  "name": "telegram-message-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A serverless Telegram group dashboard for Vercel",
+  "scripts": {
+    "start": "node server.js",
+    "webhook:set": "node --env-file=.env scripts/set-webhook.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "@upstash/redis": "^1.35.3" }
+}
