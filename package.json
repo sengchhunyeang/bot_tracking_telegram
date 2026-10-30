@@ -4,9 +4,9 @@
   "private": true,
   "description": "A serverless Telegram group dashboard for Vercel",
   "scripts": {
-    "start": "node scripts/local-server.js",
-    "webhook:set": "node --env-file=.env scripts/set-webhook.js"
+    "start": "node scripts/local-server.js"
   },
-  "engines": { "node": ">=20" },
-  "dependencies": { "@upstash/redis": "^1.35.3" }
+  "engines": {
+    "node": ">=20"
+  }
 }

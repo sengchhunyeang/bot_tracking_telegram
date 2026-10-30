@@ -1,34 +1,27 @@
 # Telegram Group Dashboard
 
-A Telegram Bot API dashboard for group messages, sender profiles, and shared media. The Vercel version uses a Telegram webhook and Upstash Redis so it works with short lived serverless functions. The local `npm start` mode remains available for development.
+A Telegram Bot API dashboard for group messages, sender profiles, and shared media.
 
 ## Deploy from GitHub to Vercel
 
-1. Push this repository to GitHub and import `sengchhunyeang/bot_tracking_telegram` in Vercel. Set `main` as the Production Branch. Once connected, pushes to `main` create production deployments and other branches create previews.
-2. In the Vercel project, add an Upstash Redis database from the Marketplace and connect it to this project. The integration supplies `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
-3. Add these project environment variables for Production (and Preview only if needed):
+1. Import `sengchhunyeang/bot_tracking_telegram` in Vercel with `main` as the Production Branch. Pushes to `main` deploy to production.
+2. Add these environment variables for Production:
    - `TELEGRAM_BOT_TOKEN` — the BotFather token; enter it in Vercel settings, never in GitHub.
    - `TELEGRAM_CHAT_ID` — defaults to `-1004466733765`.
-   - `TELEGRAM_WEBHOOK_SECRET` — a random string using only letters, numbers, `_`, and `-` (1–256 characters).
-   - `DASHBOARD_PASSWORD` — a strong password; the public dashboard uses HTTP Basic Auth with username `admin`.
-4. Redeploy after setting the variables. Copy `.env.example` to `.env` locally, fill in the Telegram token, chat ID, and webhook secret, then configure Telegram once:
+3. Redeploy after setting the variables.
 
-   ```sh
-   npm run webhook:set -- https://your-project.vercel.app
-   ```
+No database is needed. The Vercel version reads messages directly from Telegram (`getUpdates`) on each request, without confirming them, so it shows what Telegram still holds: **messages from the last 24 hours**. The bot must not have a webhook set.
 
-   Use the production Vercel domain. Stop the local polling server before setting the webhook; Telegram does not allow `getUpdates` polling and webhooks at the same time.
-
-After the one-time Vercel import and webhook setup, each push to the production branch deploys automatically. Vercel preview deployments do not change the Telegram webhook.
+The dashboard has no login: anyone with the URL can read the group's messages and media.
 
 ## Local development
 
-`npm start` runs the local polling server (`scripts/local-server.js`; kept out of the project root so Vercel does not detect it as the app entrypoint) at `http://localhost:3000`. The webhook deployment uses Redis and Vercel Functions instead of local disk storage.
+`npm start` runs the local polling server (`scripts/local-server.js`; kept out of the project root so Vercel does not detect it as the app entrypoint) at `http://localhost:3000`. It confirms updates as it reads them and saves history to `data/`, so while it runs, those messages are removed from Telegram's queue and will not appear on the Vercel dashboard.
 
 ## Telegram behavior
 
-The bot must be in the target group and be an administrator (or have Group Privacy Mode disabled) to receive ordinary messages. The Bot API cannot fetch earlier group history; the hosted dashboard stores updates received after the webhook is set. Telegram’s hosted Bot API allows bots to download files up to 20 MB.
+The bot must be in the target group and be an administrator (or have Group Privacy Mode disabled) to receive ordinary messages. The Bot API cannot fetch earlier group history. Telegram's hosted Bot API allows bots to download files up to 20 MB.
 
-## Privacy and secrets
+## Secrets
 
-The public dashboard requires `DASHBOARD_PASSWORD`; message and media APIs use the same Basic Auth protection. The Telegram webhook endpoint checks `TELEGRAM_WEBHOOK_SECRET`. Do not commit `.env`, bot tokens, passwords, or Upstash credentials.
+Do not commit `.env` or bot tokens.
