@@ -1,10 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const store = require('../lib/message-store');
 
 const html = fs.readFileSync(path.join(process.cwd(), 'views', 'index.html'), 'utf8');
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const UPDATE_TYPES = ['message', 'edited_message', 'channel_post', 'edited_channel_post'];
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const mimeByExtension = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', svg: 'image/svg+xml',
@@ -89,27 +89,6 @@ async function sendFile(res, fileId, name, range) {
   require('node:stream').Readable.fromWeb(download.body).pipe(res);
 }
 
-// Vercel keeps no state between requests, so messages are read straight from Telegram.
-// Updates are never confirmed, which lets Telegram keep them (for up to 24 hours).
-async function readMessages() {
-  if (!TOKEN) return [];
-  let batch = await telegram('getUpdates', { limit: 100, timeout: 0, allowed_updates: UPDATE_TYPES });
-  let previous = [];
-  // getUpdates returns the oldest 100; skip ahead so the newest messages are always visible.
-  while (batch.length === 100) {
-    previous = batch;
-    batch = await telegram('getUpdates', { offset: batch.at(-1).update_id + 1, limit: 100, timeout: 0, allowed_updates: UPDATE_TYPES });
-  }
-  const byId = new Map();
-  for (const update of [...previous, ...batch]) {
-    const message = update.message || update.edited_message || update.channel_post || update.edited_channel_post;
-    if (!message || (CHAT_ID && String(message.chat.id) !== CHAT_ID)) continue;
-    const record = normalizeMessage(message, update.update_id);
-    byId.set(record.id, record);
-  }
-  return [...byId.values()].sort((a, b) => b.updateId - a.updateId);
-}
-
 module.exports = async function handler(req, res) {
   const url = new URL(req.url, 'https://vercel.invalid');
   const route = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
@@ -118,40 +97,60 @@ module.exports = async function handler(req, res) {
   res.setHeader('referrer-policy', 'same-origin');
 
   try {
+    if (endpoint === 'webhook') {
+      if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return; }
+      const secret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+      if (!secret || req.headers['x-telegram-bot-api-secret-token'] !== secret) {
+        sendJson(res, 401, { error: 'Invalid webhook secret.' }); return;
+      }
+      const update = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const message = update?.message || update?.edited_message || update?.channel_post || update?.edited_channel_post;
+      if (message && (!CHAT_ID || String(message.chat.id) === CHAT_ID)) {
+        await store.saveMessage(normalizeMessage(message, update.update_id));
+      }
+      sendJson(res, 200, { ok: true }); return;
+    }
     // The / rewrite keeps the original URL, so an empty route is the dashboard too.
     if (endpoint === 'dashboard' || endpoint === '') {
       if (req.method !== 'GET') { res.writeHead(405); res.end('Method not allowed'); return; }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(html); return;
     }
     if (endpoint === 'status') {
-      if (!TOKEN || !CHAT_ID) { sendJson(res, 200, { mode: 'vercel', configured: false, connected: false, bot: null, lastError: null, groupHealth: null, count: 0 }); return; }
+      const telegramConfigured = Boolean(TOKEN && CHAT_ID);
+      const databaseConfigured = Boolean(process.env.DATABASE_URL);
+      const webhookConfigured = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET);
+      if (!telegramConfigured || !databaseConfigured || !webhookConfigured) {
+        const lastError = !telegramConfigured ? 'TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required.'
+          : !databaseConfigured ? 'DATABASE_URL is not configured.' : 'TELEGRAM_WEBHOOK_SECRET is not configured.';
+        sendJson(res, 200, { mode: 'vercel', configured: false, telegramConfigured, databaseConfigured, webhookConfigured,
+          connected: false, bot: null, lastError,
+          groupHealth: null, count: 0 }); return;
+      }
       const bot = await telegram('getMe');
       const [chat, member, webhook] = await Promise.all([
         telegram('getChat', { chat_id: CHAT_ID }), telegram('getChatMember', { chat_id: CHAT_ID, user_id: bot.id }), telegram('getWebhookInfo'),
       ]);
       const isAdmin = ['administrator', 'creator'].includes(member.status);
-      const messages = webhook.url ? [] : await readMessages();
-      sendJson(res, 200, { mode: 'vercel', configured: true, connected: true, bot, lastError: null,
+      const count = await store.countMessages(CHAT_ID);
+      sendJson(res, 200, { mode: 'vercel', configured: true, telegramConfigured, databaseConfigured, webhookConfigured,
+        connected: true, bot, lastError: webhook.url ? null : 'Telegram webhook is not active. Set TELEGRAM_WEBHOOK_URL and run npm run telegram:set-webhook.',
         groupHealth: { accessible: true, title: chat.title || 'Telegram group', memberStatus: member.status, isAdmin,
-          privacyMayBlock: !isAdmin && !bot.can_read_all_group_messages, webhookActive: Boolean(webhook.url) },
-        count: messages.length }); return;
+          privacyMayBlock: !isAdmin && !bot.can_read_all_group_messages, webhookActive: Boolean(webhook.url) }, count }); return;
     }
     if (endpoint === 'messages') {
       if (req.method !== 'GET') { res.writeHead(405); res.end('Method not allowed'); return; }
       const q = (url.searchParams.get('q') || '').toLowerCase(); const chat = url.searchParams.has('chat') ? url.searchParams.get('chat') : CHAT_ID;
-      const messages = await readMessages();
+      const messages = await store.listMessages(chat);
       sendJson(res, 200, messages.filter(m => (!chat || m.chatId === chat) && (!q || `${m.text} ${m.sender} ${m.chat} ${m.username}`.toLowerCase().includes(q)))); return;
     }
     if (endpoint === 'chats') {
-      const messages = await readMessages();
-      const chats = [...new Map(messages.map(m => [m.chatId, { id: m.chatId, title: m.chat, type: m.type }])).values()];
+      const chats = await store.listChats();
       if (CHAT_ID && !chats.some(chat => chat.id === CHAT_ID)) chats.unshift({ id: CHAT_ID, title: 'Selected Telegram group', type: 'supergroup' });
       sendJson(res, 200, chats); return;
     }
     if (endpoint === 'profiles') {
       const chat = url.searchParams.has('chat') ? url.searchParams.get('chat') : CHAT_ID;
-      const messages = await readMessages();
-      const userIds = [...new Set(messages.filter(m => (!chat || m.chatId === chat) && m.senderId).map(m => m.senderId))];
+      const userIds = await store.listSenderIds(chat);
       // The photo endpoint looks up the picture; the page hides the <img> if there is none.
       sendJson(res, 200, Object.fromEntries(userIds.map(userId => [userId, { photoUrl: `/api/profile-photo/${encodeURIComponent(userId)}` }]))); return;
     }
@@ -164,8 +163,7 @@ module.exports = async function handler(req, res) {
     }
     if (endpoint === 'media' && route[1]) {
       const fileId = decodeURIComponent(route.slice(1).join('/'));
-      const messages = await readMessages();
-      const record = messages.find(m => m.media?.fileId === fileId);
+      const record = await store.findMessageByMedia(fileId);
       if (!record) { res.writeHead(404); res.end('Media not found'); return; }
       await sendFile(res, fileId, record.media.name, req.headers.range); return;
     }

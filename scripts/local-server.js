@@ -11,10 +11,13 @@ function loadEnv() {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 loadEnv();
+const store = require('../lib/message-store');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const port = Number(process.env.PORT || 3000);
 const targetChatId = process.env.TELEGRAM_CHAT_ID || '';
+const sharedMode = Boolean(process.env.DATABASE_URL);
+const localPollingEnabled = process.env.LOCAL_TELEGRAM_POLLING === 'true';
 const dataDir = path.join(__dirname, '..', 'data');
 const messagesPath = path.join(dataDir, 'messages.json');
 const maxDownloadBytes = 20 * 1024 * 1024;
@@ -142,21 +145,31 @@ async function diagnoseGroup() {
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'views', 'index.html'));
 const server = http.createServer(async (req, res) => {
+  try {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (url.pathname === '/api/status') {
+    const count = sharedMode ? await store.countMessages(targetChatId) : messages.length;
+    const databaseConfigured = sharedMode;
+    const webhookConfigured = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET);
+    const configured = Boolean(token && (sharedMode ? webhookConfigured : localPollingEnabled));
+    const statusError = sharedMode && !groupHealth?.webhookActive
+      ? 'Telegram webhook is not active. Set TELEGRAM_WEBHOOK_URL and run npm run telegram:set-webhook.' : lastError;
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ configured: Boolean(token), connected: Boolean(bot) && !lastError, bot, lastError, groupHealth, count: messages.length })); return;
+    res.end(JSON.stringify({ mode: 'local', configured, telegramConfigured: Boolean(token), databaseConfigured, webhookConfigured,
+      connected: Boolean(bot) && !lastError, bot, lastError: statusError, groupHealth, count })); return;
   }
   if (url.pathname === '/api/messages') {
     const q = (url.searchParams.get('q') || '').toLowerCase();
     const activeChat = url.searchParams.has('chat') ? (url.searchParams.get('chat') || '') : targetChatId;
-    const filtered = messages.filter(m => (!activeChat || m.chatId === activeChat) && (!q || `${m.text} ${m.sender} ${m.chat} ${m.username}`.toLowerCase().includes(q)));
+    const source = sharedMode ? await store.listMessages(activeChat) : messages;
+    const filtered = source.filter(m => (!activeChat || m.chatId === activeChat) && (!q || `${m.text} ${m.sender} ${m.chat} ${m.username}`.toLowerCase().includes(q)));
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(filtered)); return;
   }
   if (url.pathname === '/api/profiles') {
     const chat = url.searchParams.has('chat') ? (url.searchParams.get('chat') || '') : targetChatId;
-    const userIds = [...new Set(messages.filter(m => (!chat || m.chatId === chat) && m.senderId).map(m => m.senderId))].slice(0, 50);
+    const userIds = sharedMode ? await store.listSenderIds(chat)
+      : [...new Set(messages.filter(m => (!chat || m.chatId === chat) && m.senderId).map(m => m.senderId))].slice(0, 50);
     const profiles = await Promise.all(userIds.map(async userId => {
       if (!profilePhotoCache.has(userId)) {
         const request = telegram('getUserProfilePhotos', { user_id: Number(userId), limit: 1 })
@@ -183,7 +196,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/api/media/')) {
     const fileId = decodeURIComponent(url.pathname.slice('/api/media/'.length));
-    const entry = messages.find(m => m.media?.fileId === fileId);
+    const entry = sharedMode ? await store.findMessageByMedia(fileId) : messages.find(m => m.media?.fileId === fileId);
     if (!entry) { res.writeHead(404); res.end('Media not found'); return; }
     try {
       const file = await telegram('getFile', { file_id: fileId });
@@ -215,7 +228,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/chats') {
-    const chats = [...new Map(messages.map(m => [m.chatId, { id: m.chatId, title: m.chat, type: m.type }])).values()];
+    const chats = sharedMode ? await store.listChats()
+      : [...new Map(messages.map(m => [m.chatId, { id: m.chatId, title: m.chat, type: m.type }])).values()];
     if (targetChatId && !chats.some(c => c.id === targetChatId)) chats.unshift({ id: targetChatId, title: groupHealth?.title || 'Selected Telegram group', type: 'supergroup' });
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(chats)); return;
   }
@@ -223,11 +237,35 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(html); return;
   }
   res.writeHead(404); res.end('Not found');
+  } catch (error) {
+    console.error(`Request failed: ${error.message}`);
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: error.message }));
+  }
 });
 
 server.listen(port, '127.0.0.1', async () => {
   console.log(`Telegram dashboard: http://localhost:${port}`);
   if (!token) { console.log('Set TELEGRAM_BOT_TOKEN in .env to connect your bot.'); return; }
-  try { bot = await telegram('getMe'); console.log(`Connected as @${bot.username || bot.first_name}`); await diagnoseGroup(); console.log(`Group access: ${JSON.stringify(groupHealth)}`); poll(); setInterval(() => diagnoseGroup().catch(() => {}), 60000).unref(); }
+  if (sharedMode) {
+    try {
+      await diagnoseGroup();
+      console.log(`Shared database: ${await store.countMessages(targetChatId)} messages.`);
+      console.log(`Telegram webhook: ${groupHealth?.webhookActive ? 'active' : 'inactive'}`);
+      setInterval(() => diagnoseGroup().catch(() => {}), 60000).unref();
+    } catch (error) {
+      lastError = error.message;
+      console.error(`Shared database connection failed: ${error.message}`);
+    }
+    return;
+  }
+  try {
+    bot = await telegram('getMe'); console.log(`Connected as @${bot.username || bot.first_name}`);
+    await diagnoseGroup(); console.log(`Group access: ${JSON.stringify(groupHealth)}`);
+    if (groupHealth?.webhookActive) console.log('Telegram webhook is active; local polling is disabled.');
+    else if (localPollingEnabled && !sharedMode) poll();
+    else console.log('Local polling is disabled. Set LOCAL_TELEGRAM_POLLING=true only for standalone local use.');
+    setInterval(() => diagnoseGroup().catch(() => {}), 60000).unref();
+  }
   catch (error) { lastError = error.message; console.error(`Telegram connection failed: ${error.message}`); poll(); }
 });

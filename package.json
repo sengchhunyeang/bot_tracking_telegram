@@ -4,9 +4,16 @@
   "private": true,
   "description": "A serverless Telegram group dashboard for Vercel",
   "scripts": {
-    "start": "node scripts/local-server.js"
+    "start": "node scripts/local-server.js",
+    "db:migrate": "node scripts/migrate-db.js",
+    "db:import-local": "node scripts/import-local-history.js",
+    "telegram:set-webhook": "node scripts/set-webhook.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@vercel/functions": "^3.10.6",
+    "pg": "^8.23.1"
   }
 }
